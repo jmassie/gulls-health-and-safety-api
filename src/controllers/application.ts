@@ -1,9 +1,12 @@
 import * as jwt from 'jsonwebtoken';
 import transaction from 'sequelize/types/lib/transaction';
-import database from '../models/index.js';
 import config from '../config/app';
 import jwk from '../config/jwk.js';
+import database from '../models/index.js';
 import MultiUseFunctions from '../multi-use-functions';
+import {
+  LICENSING_REPLY_TO_NOTIFY_EMAIL_ID
+} from '../notify-template-ids';
 
 const {
   Application,
@@ -196,6 +199,48 @@ const setLicenceApplicantNotificationDetails = (
 };
 
 /**
+ * This function returns an object containing the details required for the license return notification email.
+ *
+ * @param {any} licenceHolderContact The ID of the licence to which the return pertains.
+ * @param {any} licenceApplicantContact The ID of the licence to which the return pertains.
+ * @param {any} siteAddress The address of the site to which the return pertains.
+ * @param {any} licenceId The ID of the licence to which the return pertains.
+ * @param {any} withdrawalReason A map containing the return details mapped to a species type string as a key.
+ * @returns {any} An object with the required details set.
+ */
+ const setWithdrawEmailDetails = (
+  licenceHolderContact: any,
+  licenceApplicantContact: any,
+  siteAddress: any,
+  licenceId: number,
+  withdrawalReason: any,
+) => {
+  return {
+    lhName: licenceHolderContact.name,
+    onBehalfName: licenceApplicantContact.name,
+    siteAddress: MultiUseFunctions.createSummaryAddress(siteAddress),
+    id: licenceId,
+    withdrawalReason: withdrawalReason,
+  };
+};
+
+/**
+ * This function calls the Notify API and asks for an email to be sent with the supplied details.
+ *
+ * @param {any} emailDetails The details to use in the email to be sent.
+ * @param {any} emailAddress The email address to send the email to.
+ */
+ const sendWithdrawalNotificationEmail = async (emailDetails: any, emailAddress: any) => {
+  if (config.notifyApiKey) {
+    const notifyClient = new NotifyClient(config.notifyApiKey);
+    await notifyClient.sendEmail('9866806b-ccd6-4b72-8e34-776076900546', emailAddress, {
+      personalisation: emailDetails,
+      emailReplyToId: LICENSING_REPLY_TO_NOTIFY_EMAIL_ID,
+    });
+  }
+};
+
+/**
  * This function calls the Notify API and asks for an email to be send with the supplied details.
  *
  * @param {any} emailDetails The details to use in the email to be sent.
@@ -251,6 +296,8 @@ const setLicenceHolderMagicLinkDetails = async (
     magicLink,
   };
 };
+
+
 
 /**
  * This function calls the Notify API and asks for an email to be sent to the licence holder
@@ -1152,6 +1199,50 @@ const ApplicationController = {
         // If everything worked then return true.
         return true;
       });
+
+      let newWithdrawal;
+
+      // If we have a confirmed application get some of its details to use in the confirmation emails.
+      if (newWithdrawal) {
+        const newWithdrawal: any = await Application.findByPk(id, {
+          include: [
+            {
+              model: Contact,
+              as: 'LicenceHolder',
+            },
+            {
+              model: Contact,
+              as: 'LicenceApplicant',
+            },
+            {
+              model: Address,
+              as: 'SiteAddress',
+            },
+            {
+              model: Withdrawal,
+              as: 'withdrawalReason',
+            },
+          ],
+        });
+
+        // The details required to generate the confirmation emails.
+        let emailDetails;
+
+        // Set the details required to generate the confirmation emails.
+        if (newWithdrawal) {
+          emailDetails = setWithdrawEmailDetails(
+            newWithdrawal.id,
+            newWithdrawal.LicenceHolder,
+            newWithdrawal.LicenceApplicant,
+            newWithdrawal.SiteAddress,
+            newWithdrawal.withdrawalReason,
+          );
+        }
+
+      // Send the email using the Notify service's API.
+      await sendWithdrawalNotificationEmail(emailDetails, newWithdrawal.LicenceHolder.emailAddress);
+      }
+
       // Everything worked so return true to the calling code.
       return true;
     } catch {
@@ -1161,5 +1252,6 @@ const ApplicationController = {
   },
 };
 
-export {ApplicationController as default};
-export {ApplicationInterface};
+export { ApplicationController as default };
+export { ApplicationInterface };
+
